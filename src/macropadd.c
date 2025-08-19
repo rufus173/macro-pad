@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include <dlfcn.h>
+#include <sys/time.h>
 //#include <asm/termbits.h>
 #include <sys/ioctl.h>
 #include <stdint.h>
@@ -10,8 +12,15 @@
 
 #define BUTTON(buttons,i) (!(buttons & (1 << (i-1))))
 
+struct mods {
+	void **handles;
+	size_t handle_count;
+	time_t *timestamps;
+};
+
 int open_serial_dev(char *serial, char *vendor, int o_flags);
 int init_arduino_serial(int fd);
+unsigned long long int time_ms();
 
 int main(int argc, char **argv){
 	//====== initialise the char device and connect ======
@@ -24,9 +33,12 @@ int main(int argc, char **argv){
 	printf("initialising serial...\n");
 	if (init_arduino_serial(mpfd) < 0) return 1;
 	//====== load symbols from shared libraries ======
+	struct mods *modules = load_modules();
 	//====== read ======
 	printf("ready\n");
+	time_t button_hold_lengths[8] = {0};
 	for (;;){
+		unsigned long long t_start = time_ms();
 		uint8_t buttons;
 		int result = read(mpfd,&buttons,sizeof(uint8_t));
 		if (result == 0) break;
@@ -35,13 +47,34 @@ int main(int argc, char **argv){
 			close(mpfd);
 			return 1;
 		}
+		unsigned long long t_now = time_ms();
 		printf("%d\n",buttons);
 		for (int button = 0; button < 8; button++){
-			printf("button %d: %d\n",button+1,BUTTON(buttons,button+1));
+			if (BUTTON(buttons,button+1)){
+				if (button_hold_lengths[button] == 0){
+					//call function
+					char buffer[1024];
+					snprintf(buffer,sizeof(buffer),"button_%d_press",button+1);
+					void (*function)(void) = dlsym(RTLD_NEXT,buffer);
+					if (function) function();
+				}
+				button_hold_lengths[button] += t_now - t_start;
+			}else{
+				if (button_hold_lengths[button] != 0){
+					//call function
+					char buffer[1024];
+					snprintf(buffer,sizeof(buffer),"button_%d_release",button+1);
+					void (*function)(unsigned long long) = dlsym(RTLD_NEXT,buffer);
+					if (function) function(button_hold_lengths[button]);
+				}
+				button_hold_lengths[button] = 0;
+			}
+			printf("button %d: %lu\n",button+1,button_hold_lengths[button]);
 		}
 		printf("---------\n");
 	}
 	//====== cleanup ======
+	free_modules(modules);
 	close(mpfd);
 	return 0;
 }
@@ -122,4 +155,26 @@ int init_arduino_serial(int fd){
 		return -1;
 	}
 	return 0;
+}
+unsigned long long int time_ms(){
+	struct timeval now;
+	gettimeofday(&now,NULL);
+	return now.tv_sec * 1000 + now.tv_usec / 1000;
+}
+struct mods *load_modules(){
+	struct mods *modules = malloc(sizeof(struct mods));
+	struct passwd *pw = getpwuid(getuid());
+	char buffer[1024] = {0};
+	snprintf(buffer,sizeof(buffer),"%s/.config/macropadd",pw->pw_dir);
+	DIR *mod_dir = opendir(buffer);
+	if (mod_dir == NULL){
+		perror("opendir");
+		free(modules);
+		return NULL;
+	}
+	closedir(mod_dir);
+	return modules;
+}
+void free_modules(struct mods *modules){
+	free(modules);
 }
