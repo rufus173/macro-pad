@@ -1,0 +1,14 @@
+mkdir -p ~/.config/systemd/user
+cat << EOF > ~/.config/systemd/user/macropadd.service 
+[Unit]
+Description=macro pad driver
+
+[Service]
+Type=simple
+ExecStart=$HOME/.config/systemd/user/macropadd
+
+[Install]
+WantedBy=default.target
+EOF
+systemctl --user daemon-reload
+systemctl --user enable --now macropadd.service

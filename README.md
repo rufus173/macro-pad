@@ -7,7 +7,8 @@ Functions should be called `button_%d_press(void)` or `button_%d_release(time_t 
 Example actions are in `src/actions.c`
 
 # Install
+(Do not do as root)
 `make all`
 `./configure`
+`./install`
 `./configure-systemd`
-`sudo ./install`
