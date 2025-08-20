@@ -1,4 +1,7 @@
 #include <stdio.h>
+#include <string.h>
+#include <pwd.h>
+#include <dirent.h>
 #include <dlfcn.h>
 #include <sys/time.h>
 //#include <asm/termbits.h>
@@ -12,16 +15,20 @@
 
 #define BUTTON(buttons,i) (!(buttons & (1 << (i-1))))
 
+struct mod {
+	void *handle;
+	char *path;
+};
 struct mods {
-	void **handles;
-	size_t handle_count;
-	time_t *timestamps;
+	struct mod *mods;
+	size_t mod_count;
 };
 
 int open_serial_dev(char *serial, char *vendor, int o_flags);
 int init_arduino_serial(int fd);
 unsigned long long int time_ms();
-
+struct mods *load_modules();
+void free_modules(struct mods *modules);
 int main(int argc, char **argv){
 	//====== initialise the char device and connect ======
 	printf("finding device...\n");
@@ -34,6 +41,10 @@ int main(int argc, char **argv){
 	if (init_arduino_serial(mpfd) < 0) return 1;
 	//====== load symbols from shared libraries ======
 	struct mods *modules = load_modules();
+	if (modules == NULL){
+		fprintf(stderr,"Could not load modules\n");
+		return 1;
+	}
 	//====== read ======
 	printf("ready\n");
 	time_t button_hold_lengths[8] = {0};
@@ -48,15 +59,21 @@ int main(int argc, char **argv){
 			return 1;
 		}
 		unsigned long long t_now = time_ms();
-		printf("%d\n",buttons);
+		//printf("%d\n",buttons);
 		for (int button = 0; button < 8; button++){
 			if (BUTTON(buttons,button+1)){
 				if (button_hold_lengths[button] == 0){
 					//call function
 					char buffer[1024];
 					snprintf(buffer,sizeof(buffer),"button_%d_press",button+1);
-					void (*function)(void) = dlsym(RTLD_NEXT,buffer);
-					if (function) function();
+					void (*function)(void) = dlsym(RTLD_DEFAULT,buffer);
+					if (function){
+						printf("calling %s\n",buffer);
+						function();
+					}else{
+						printf("missing function %s\n",buffer);
+						fprintf(stderr,"%s\n",dlerror());
+					}
 				}
 				button_hold_lengths[button] += t_now - t_start;
 			}else{
@@ -64,14 +81,14 @@ int main(int argc, char **argv){
 					//call function
 					char buffer[1024];
 					snprintf(buffer,sizeof(buffer),"button_%d_release",button+1);
-					void (*function)(unsigned long long) = dlsym(RTLD_NEXT,buffer);
+					void (*function)(unsigned long long) = dlsym(RTLD_DEFAULT,buffer);
 					if (function) function(button_hold_lengths[button]);
 				}
 				button_hold_lengths[button] = 0;
 			}
-			printf("button %d: %lu\n",button+1,button_hold_lengths[button]);
+			//printf("button %d: %lu\n",button+1,button_hold_lengths[button]);
 		}
-		printf("---------\n");
+		//printf("---------\n");
 	}
 	//====== cleanup ======
 	free_modules(modules);
@@ -163,18 +180,42 @@ unsigned long long int time_ms(){
 }
 struct mods *load_modules(){
 	struct mods *modules = malloc(sizeof(struct mods));
+	memset(modules,0,sizeof(struct mods));
 	struct passwd *pw = getpwuid(getuid());
-	char buffer[1024] = {0};
-	snprintf(buffer,sizeof(buffer),"%s/.config/macropadd",pw->pw_dir);
-	DIR *mod_dir = opendir(buffer);
-	if (mod_dir == NULL){
-		perror("opendir");
+	char name_buffer[1024] = {0};
+	snprintf(name_buffer,sizeof(name_buffer),"%s/.config/macropadd",pw->pw_dir);
+	//sort alphabeticaly
+	struct dirent **entry_list;
+	int count = scandir(name_buffer,&entry_list,NULL,alphasort);
+	if (count < 0){
+		perror("scandir");
 		free(modules);
 		return NULL;
 	}
-	closedir(mod_dir);
+	for (int i = 0; i < count; i++){
+		if (entry_list[i]->d_type == DT_REG){
+			snprintf(name_buffer,sizeof(name_buffer),"%s/.config/macropadd/%s",pw->pw_dir,entry_list[i]->d_name);
+			void *handle = dlopen(name_buffer,RTLD_NOW | RTLD_GLOBAL);
+			if (handle == NULL){
+				fprintf(stderr,"Could not open %s: %s\n",name_buffer,dlerror());
+			}else{
+				modules->mod_count++;
+				modules->mods = realloc(modules->mods,modules->mod_count*sizeof(struct mod));
+				modules->mods[modules->mod_count-1].handle = handle;
+				modules->mods[modules->mod_count-1].path = strdup(name_buffer);
+				printf("loaded %s\n",name_buffer);
+			}
+		}
+		free(entry_list[i]);
+	}
+	free(entry_list);
 	return modules;
 }
 void free_modules(struct mods *modules){
+	for (size_t i = 0; i < modules->mod_count; i++){
+		dlclose(modules->mods[i].handle);
+		free(modules->mods[i].path);
+	}
+	free(modules->mods);
 	free(modules);
 }
