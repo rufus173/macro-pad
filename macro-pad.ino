@@ -13,6 +13,7 @@
 
 struct __attribute__((packed)) advertisement {
 	byte mac[6];
+	uint8_t state;
 };
 
 //====== globals ======
@@ -33,7 +34,7 @@ void setup(){
 	//	}
 	//}
 	//Serial.println("connected!");
-	udp.begin(UDP_PORT);
+	//udp.begin();
 	//input
 	pinMode(BTN_8,INPUT_PULLUP);
 	pinMode(BTN_7,INPUT_PULLUP);
@@ -46,6 +47,7 @@ void setup(){
 }
 
 void loop(){
+	static uint8_t prev_status = 0;
 	uint8_t status = 0
 		+(digitalRead(BTN_8) << 7)
 		+(digitalRead(BTN_7) << 6)
@@ -56,5 +58,14 @@ void loop(){
 		+(digitalRead(BTN_2) << 1)
 		+(digitalRead(BTN_1) << 0);
 	Serial.write(status);
-	delay(100);
+	if (status != prev_status){
+		udp.beginPacket(IPAddress(255,255,255,255),UDP_PORT);
+		struct advertisement packet = {0};
+		memcpy(packet.mac,mac,sizeof(mac));
+		packet.state = status;
+		udp.write((const uint8_t *)&packet,sizeof(struct advertisement));
+		udp.endPacket();
+	}
+	prev_status = status;
+	delay(50);
 }

@@ -1,5 +1,5 @@
 #define _GNU_SOURCE
-#include <wait.h>
+#include <sys/wait.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -179,12 +179,12 @@ int init_arduino_serial(int fd){
 		return -1;
 	}
 	//send reset
-	int rts = TIOCM_RTS;
-	int result = ioctl(fd,TIOCMBIS,&rts);
-	if (result < 0){
-		perror("ioctl");
-		return -1;
-	}
+	//int rts = TIOCM_RTS;
+	//int result = ioctl(fd,TIOCMBIS,&rts);
+	//if (result < 0){
+	//	perror("ioctl");
+	//	return -1;
+	//}
 	return 0;
 }
 unsigned long long int time_ms(){
