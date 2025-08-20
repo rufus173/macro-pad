@@ -1,3 +1,4 @@
 #!/bin/sh
 mkdir -p ~/.config/systemd/user
 mkdir -p ~/.config/macropadd
+cp actions.so ~/.config/macropadd

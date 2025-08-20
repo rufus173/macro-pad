@@ -1,8 +1,10 @@
+#define _GNU_SOURCE
+#include <wait.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <pwd.h>
 #include <dirent.h>
-#include <dlfcn.h>
 #include <sys/time.h>
 //#include <asm/termbits.h>
 #include <sys/ioctl.h>
@@ -12,12 +14,14 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include <termios.h>
+#include <dlfcn.h>
 
 #define BUTTON(buttons,i) (!(buttons & (1 << (i-1))))
 
 struct mod {
 	void *handle;
 	char *path;
+	time_t timestamp;
 };
 struct mods {
 	struct mod *mods;
@@ -27,8 +31,11 @@ struct mods {
 int open_serial_dev(char *serial, char *vendor, int o_flags);
 int init_arduino_serial(int fd);
 unsigned long long int time_ms();
+void *dlsym_find(struct mods *modules,char *name);
+int reload_modules(struct mods *modules);
 struct mods *load_modules();
 void free_modules(struct mods *modules);
+
 int main(int argc, char **argv){
 	//====== initialise the char device and connect ======
 	printf("finding device...\n");
@@ -40,6 +47,11 @@ int main(int argc, char **argv){
 	printf("initialising serial...\n");
 	if (init_arduino_serial(mpfd) < 0) return 1;
 	//====== load symbols from shared libraries ======
+	void *global_dlopen_handle = dlopen(NULL,RTLD_NOW);
+	if (global_dlopen_handle == NULL){
+		fprintf(stderr,"%s\n",dlerror());
+		return 1;
+	}
 	struct mods *modules = load_modules();
 	if (modules == NULL){
 		fprintf(stderr,"Could not load modules\n");
@@ -48,8 +60,9 @@ int main(int argc, char **argv){
 	//====== read ======
 	printf("ready\n");
 	time_t button_hold_lengths[8] = {0};
+	unsigned long long t_start = time_ms();
 	for (;;){
-		unsigned long long t_start = time_ms();
+		//====== read button status ======
 		uint8_t buttons;
 		int result = read(mpfd,&buttons,sizeof(uint8_t));
 		if (result == 0) break;
@@ -58,6 +71,7 @@ int main(int argc, char **argv){
 			close(mpfd);
 			return 1;
 		}
+		//====== process button status ======
 		unsigned long long t_now = time_ms();
 		//printf("%d\n",buttons);
 		for (int button = 0; button < 8; button++){
@@ -66,14 +80,8 @@ int main(int argc, char **argv){
 					//call function
 					char buffer[1024];
 					snprintf(buffer,sizeof(buffer),"button_%d_press",button+1);
-					void (*function)(void) = dlsym(RTLD_DEFAULT,buffer);
-					if (function){
-						printf("calling %s\n",buffer);
-						function();
-					}else{
-						printf("missing function %s\n",buffer);
-						fprintf(stderr,"%s\n",dlerror());
-					}
+					void (*func)(void) = dlsym_find(modules,buffer);
+					if (func) func();
 				}
 				button_hold_lengths[button] += t_now - t_start;
 			}else{
@@ -81,14 +89,20 @@ int main(int argc, char **argv){
 					//call function
 					char buffer[1024];
 					snprintf(buffer,sizeof(buffer),"button_%d_release",button+1);
-					void (*function)(unsigned long long) = dlsym(RTLD_DEFAULT,buffer);
-					if (function) function(button_hold_lengths[button]);
+					void (*func)(time_t) = dlsym_find(modules,buffer);
+					if (func) func(button_hold_lengths[button]);
 				}
 				button_hold_lengths[button] = 0;
 			}
 			//printf("button %d: %lu\n",button+1,button_hold_lengths[button]);
 		}
 		//printf("---------\n");
+		//====== reload any modified modules ======
+		//reload_modules(modules);
+		//cant due to segmentation fault
+		//====== misc cleanup ======
+		waitpid(-1,NULL,WNOHANG); //wait for forks button presses may have created
+		t_start = t_now;
 	}
 	//====== cleanup ======
 	free_modules(modules);
@@ -195,7 +209,7 @@ struct mods *load_modules(){
 	for (int i = 0; i < count; i++){
 		if (entry_list[i]->d_type == DT_REG){
 			snprintf(name_buffer,sizeof(name_buffer),"%s/.config/macropadd/%s",pw->pw_dir,entry_list[i]->d_name);
-			void *handle = dlopen(name_buffer,RTLD_NOW | RTLD_GLOBAL);
+			void *handle = dlmopen(LM_ID_NEWLM,name_buffer,RTLD_NOW);
 			if (handle == NULL){
 				fprintf(stderr,"Could not open %s: %s\n",name_buffer,dlerror());
 			}else{
@@ -203,6 +217,10 @@ struct mods *load_modules(){
 				modules->mods = realloc(modules->mods,modules->mod_count*sizeof(struct mod));
 				modules->mods[modules->mod_count-1].handle = handle;
 				modules->mods[modules->mod_count-1].path = strdup(name_buffer);
+				struct stat statbuf = {0};
+				int result = stat(name_buffer,&statbuf);
+				if (result < 0) perror("stat");
+				modules->mods[modules->mod_count-1].timestamp = statbuf.st_mtim.tv_sec;
 				printf("loaded %s\n",name_buffer);
 			}
 		}
@@ -218,4 +236,35 @@ void free_modules(struct mods *modules){
 	}
 	free(modules->mods);
 	free(modules);
+}
+int reload_modules(struct mods *modules){
+	for (size_t i = 0; i < modules->mod_count; i++){
+		//read module timestamp
+		struct mod *module = modules->mods+i;
+		struct stat statbuf;
+		int result = stat(module->path,&statbuf);
+		if (result < 0) continue;
+		if (module->timestamp < statbuf.st_mtim.tv_sec && module->handle != NULL){
+			printf("Reloading module %s...\n",module->path);
+			//reset timestamp
+			module->timestamp = statbuf.st_mtim.tv_sec;
+			dlclose(module->handle);
+			void *handle = dlmopen(LM_ID_NEWLM,module->path,RTLD_NOW);
+			if (handle == NULL){
+				fprintf(stderr,"Error reopening module; %s\n",dlerror());
+			}
+			module->handle = handle;
+		}
+	}
+	return 0;
+}
+void *dlsym_find(struct mods *modules,char *name){
+	for (size_t i = 0; i < modules->mod_count; i++){
+		struct mod *module = modules->mods + i;
+		if (module->handle != NULL){
+			void *func = dlsym(module->handle,name);
+			if (func != NULL) return func;
+		}
+	}
+	return NULL;
 }
