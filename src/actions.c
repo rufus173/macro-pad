@@ -13,6 +13,12 @@ void button_2_press(){
 		execlp("firefox","firefox",NULL);
 	}
 }
+void button_3_press(){
+	if (fork() == 0){
+		//minimise all windows
+		execlp("bluetoothctl","bluetoothctl","connect","90:7a:58:e9:9e:7b",NULL);
+	}
+}
 void button_4_press(){
 	if (fork() == 0){
 		//minimise all windows
@@ -21,5 +27,12 @@ void button_4_press(){
 		system("hyprctl dispatch focusmonitor HDMI-A-1");
 		system("hyprctl dispatch workspace 21");
 		exit(0);
+	}
+}
+void button_8_release(time_t msecs_held){
+	if (msecs_held > 2000){
+		if (fork() == 0){
+			execlp("shutdown","shutdown","now",NULL);
+		}
 	}
 }

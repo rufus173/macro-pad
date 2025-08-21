@@ -58,6 +58,15 @@ int main(int argc, char **argv){
 		return 1;
 	}
 	//====== read ======
+	//read some of the rubbish and discard it
+	char rubbish[100];
+	int result = read(mpfd,rubbish,sizeof(rubbish));
+	if (result < 0){
+		perror("read");
+		free_modules(modules);
+		return -1;
+	}
+	//setup
 	printf("ready\n");
 	time_t button_hold_lengths[8] = {0};
 	unsigned long long t_start = time_ms();
