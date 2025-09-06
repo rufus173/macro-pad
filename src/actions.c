@@ -1,6 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+
+static volatile int dpms_status = 0;
+
 void button_1_press(){
 	pid_t pid = fork();
 	if (pid == 0){
@@ -34,5 +37,14 @@ void button_8_release(time_t msecs_held){
 		if (fork() == 0){
 			execlp("shutdown","shutdown","now",NULL);
 		}
+	}
+}
+void button_5_press(){
+	const char *dpms_modes[] = {"on","off"};
+	dpms_status++;
+	dpms_status%=2;
+	if (fork() == 0){
+		//minimise all windows
+		execlp("hyprctl","hyprctl","dispatch","dpms",dpms_modes[dpms_status],NULL);
 	}
 }
