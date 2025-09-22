@@ -1,3 +1,4 @@
+#ifndef ARDUINO
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -48,3 +49,4 @@ void button_5_press(){
 		execlp("hyprctl","hyprctl","dispatch","dpms",dpms_modes[dpms_status],NULL);
 	}
 }
+#endif
