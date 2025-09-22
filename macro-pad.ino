@@ -1,5 +1,6 @@
 #include "../wifi_password.h" //just defines WIFI_SSID and WIFI_PASSWORD
 #include <WiFi.h>
+#include <LiquidCrystal.h>
 
 #define UDP_PORT 7495
 #define BTN_8 27
@@ -10,17 +11,31 @@
 #define BTN_3 33
 #define BTN_2 32
 #define BTN_1 35
+#define LCD_RS 21
+#define LCD_RW 19
+#define LCD_E 18
+#define LCD_D7 15
+#define LCD_D6 2
+#define LCD_D5 4
+#define LCD_D4 5
 
 struct __attribute__((packed)) advertisement {
 	byte mac[6];
 	uint8_t state;
 };
+struct __attribute__((packed)) serial_data_header {
+	uint8_t type;
+	uint8_t length;
+};
 
 //====== globals ======
 byte mac[6];
 WiFiUDP udp;
+LiquidCrystal lcd(LCD_RS,LCD_RW,LCD_E,LCD_D4,LCD_D5,LCD_D6,LCD_D7);
 
 void setup(){
+	lcd.begin(16,2);
+	lcd.print("Online");
 	Serial.begin(9600);
 	WiFi.begin(WIFI_SSID,WIFI_PASSWORD);
 	WiFi.macAddress(mac);
@@ -47,6 +62,7 @@ void setup(){
 }
 
 void loop(){
+	//====== read and send the button status ======
 	static uint8_t prev_status = 0;
 	uint8_t status = 0
 		+(digitalRead(BTN_8) << 7)
@@ -67,5 +83,32 @@ void loop(){
 		udp.endPacket();
 	}
 	prev_status = status;
+	//====== read commands and data from serial ======
+	while (Serial.available() >= 2){
+		struct serial_data_header header;
+		int bytes_read = Serial.read((uint8_t *)&header,sizeof(struct serial_data_header));
+		//lcd.clear();
+		//lcd.print("read "+String(bytes_read)+" bytes");
+		if (bytes_read == sizeof(struct serial_data_header)){
+			char buffer[UINT8_MAX+2];
+			memset(buffer,0,sizeof(buffer));
+			int bytes_read = Serial.readBytes(buffer,header.length);
+			//String debug = String(bytes_read) + " " + String(header.length);
+			//lcd.clear();
+			//lcd.print(String(header.type) + " " + String(header.length));
+			switch (header.type){
+			case 0: //====== write data to lcd screen row 0======
+				lcd.print(buffer);
+				break;
+			case 1:
+				lcd.setCursor(0,1);
+				lcd.print(buffer);
+				break;
+			case 2:
+				lcd.clear();
+				break;
+			}
+		}
+	}
 	delay(50);
 }
