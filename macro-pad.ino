@@ -98,6 +98,7 @@ void loop(){
 			//lcd.print(String(header.type) + " " + String(header.length));
 			switch (header.type){
 			case 0: //====== write data to lcd screen row 0======
+				lcd.setCursor(0,0);
 				lcd.print(buffer);
 				break;
 			case 1:
