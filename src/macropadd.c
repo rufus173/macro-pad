@@ -1,6 +1,8 @@
+#ifndef ARDUINO
 #define _GNU_SOURCE
 #include <sys/wait.h>
 #include <stdio.h>
+#include <time.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <pwd.h>
@@ -17,11 +19,21 @@
 #include <dlfcn.h>
 
 #define BUTTON(buttons,i) (!(buttons & (1 << (i-1))))
+#define COMMAND_WRITE_TOP_LCD 0
+#define COMMAND_WRITE_BOTTOM_LCD 1
+#define COMMAND_CLEAR_LCD 2
+#define MAX(a,b) (((a) > (b)) ? (a) : (b))
+#define MIN(a,b) (((a) < (b)) ? (a) : (b))
 
 struct mod {
 	void *handle;
 	char *path;
 	time_t timestamp;
+};
+struct __attribute__((packed)) serial_command {
+	uint8_t type; //0 for lcd write
+	uint8_t length;
+	char data[];
 };
 struct mods {
 	struct mod *mods;
@@ -35,11 +47,12 @@ void *dlsym_find(struct mods *modules,char *name);
 int reload_modules(struct mods *modules);
 struct mods *load_modules();
 void free_modules(struct mods *modules);
+int issue_command(int fd,int command,char *data,size_t len);
 
 int main(int argc, char **argv){
 	//====== initialise the char device and connect ======
 	printf("finding device...\n");
-	int mpfd = open_serial_dev("1a86_USB_Serial","1a86",O_RDONLY);
+	int mpfd = open_serial_dev("1a86_USB_Serial","1a86",O_RDWR);
 	if (mpfd < 0){
 		fprintf(stderr,"Could not find serial device\n");
 		return 1;
@@ -70,15 +83,27 @@ int main(int argc, char **argv){
 	printf("ready\n");
 	time_t button_hold_lengths[8] = {0};
 	unsigned long long t_start = time_ms();
-	for (;;){
+	for (size_t cycle = 0;;){
 		//====== read button status ======
 		uint8_t buttons;
-		int result = read(mpfd,&buttons,sizeof(uint8_t));
+		long long int result = read(mpfd,&buttons,sizeof(uint8_t));
 		if (result == 0) break;
 		if (result < 0){
 			perror("read");
 			close(mpfd);
 			return 1;
+		}
+		//printf("%d\n",buttons);
+		//====== print data to lcd ======
+		if ((cycle % 30) == 0){
+			char top_message[UINT8_MAX+1] = "Active";
+			char bottom_message[UINT8_MAX+1];
+			time_t timestamp = time(NULL);
+			struct tm *current_time = localtime(&timestamp);
+			strftime(bottom_message,sizeof(bottom_message),"%H:%M",current_time);
+			//issue_command(mpfd,COMMAND_CLEAR_LCD,NULL,0);
+			issue_command(mpfd,COMMAND_WRITE_TOP_LCD,top_message,strlen(top_message));
+			issue_command(mpfd,COMMAND_WRITE_BOTTOM_LCD,bottom_message,strlen(bottom_message));
 		}
 		//====== process button status ======
 		unsigned long long t_now = time_ms();
@@ -179,7 +204,7 @@ int init_arduino_serial(int fd){
 	//config.c_cflag |= CS8
 	//settings.c_cc[VMIN] = 1;
 	//settings.c_cc[VTIME] = 0;
-	//cfsetspeed(&settings,B9600);
+	cfsetspeed(&settings,B9600);
 	cfmakeraw(&settings);
 	settings.c_cflag |= (CLOCAL | CREAD);
 	settings.c_iflag &= ~(IXOFF | IXANY);
@@ -277,3 +302,18 @@ void *dlsym_find(struct mods *modules,char *name){
 	}
 	return NULL;
 }
+int issue_command(int fd,int command,char *data,size_t len){
+	len = MIN(len,UINT8_MAX);
+	size_t command_size = len+2;
+	struct serial_command *packet = malloc(command_size);
+	packet->type = command;
+	packet->length = len;
+	if (len > 0) memcpy(packet->data,data,len);
+	long long int length = write(fd,packet,command_size);
+	if (length == -1){
+		perror("write");
+		return -1;
+	}
+	return 0;
+}
+#endif
